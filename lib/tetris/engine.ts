@@ -81,6 +81,14 @@ export class TetrisEngine {
     this.reset();
   }
 
+  /** Re-seed mid-session (shared room seed on game start). Clears queue/bag. */
+  setSeed(seed: number) {
+    this.rand = mulberry32(seed >>> 0);
+    this.bag = [];
+    this.queue = [];
+    this.refillQueue();
+  }
+
   reset() {
     this.board = Array.from({ length: TOTAL_ROWS }, () =>
       Array<Cell>(COLS).fill(0)

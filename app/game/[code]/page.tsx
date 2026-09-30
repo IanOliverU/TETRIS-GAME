@@ -16,6 +16,7 @@ import MusicPlayer from "@/components/MusicPlayer";
 import BoardCanvas from "@/components/BoardCanvas";
 import PiecePreview from "@/components/PiecePreview";
 import TouchControls from "@/components/TouchControls";
+import SpectatorPanel from "@/components/SpectatorPanel";
 
 function encodeVisible(board: TetrisEngine["board"]): string[] {
   const map: Record<string, string> = { "0": "0", I: "1", O: "2", T: "3", S: "4", Z: "5", J: "6", L: "7", G: "8" };
@@ -49,7 +50,7 @@ function Room() {
     enabled: !!session,
   });
 
-  const { snap, started, start, action, refresh, setOnLock, engine } = useTetris(
+  const { snap, start, action, refresh, setOnLock, engine } = useTetris(
     room.seed,
     room.phase === "playing"
   );
@@ -69,7 +70,8 @@ function Room() {
   const peerAlive = useCallback(
     (id: string) => {
       if (eliminations[id]) return false;
-      if (id === session?.playerId) return engine.status !== "over";
+      // Only an actively falling board counts as alive (idle lobby/spectator boards don't).
+      if (id === session?.playerId) return engine.status === "playing";
       const s = peerStatus[id];
       if (s) return s.alive;
       const p = room.peers.find((x) => x.playerId === id);
@@ -85,7 +87,7 @@ function Room() {
     ids.forEach((id) => {
       if (eliminations[id]) return;
       if (id === session?.playerId) {
-        if (engine.status !== "over") n++;
+        if (engine.status === "playing") n++;
       } else if (peerStatus[id]?.alive ?? true) n++;
     });
     return n;
@@ -148,17 +150,33 @@ function Room() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room.phase, room.pendingStart?.startAt]);
 
+  const gameIdRef = useRef<number | null>(null);
+  // Joined after GO (no shared countdown seen) → spectate this match, play next.
+  const [joinedLate, setJoinedLate] = useState(false);
   useEffect(() => {
-    if (room.phase === "playing" && !started) {
+    if (room.phase === "playing") {
+      // No shared countdown for this game (late join) → spectate, don't start engine.
+      if (!room.pendingStart) {
+        setJoinedLate(true);
+        return;
+      }
+      // Guard per game (startAt) so re-START / PLAY AGAIN always resets,
+      // and the shared room seed is applied on every client.
+      const gameId = room.pendingStart.startAt;
+      if (gameIdRef.current === gameId) return;
+      gameIdRef.current = gameId;
       eliminatedRef.current = false;
+      setJoinedLate(false);
       battle.reset();
       setEliminations({});
       setPeerStatus({});
       setSpectateId(null);
-      start();
+      start(room.pendingStart.seed ?? room.seed);
     }
     if (room.phase === "lobby") {
       eliminatedRef.current = false;
+      gameIdRef.current = null;
+      setJoinedLate(false);
       battle.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -168,7 +186,7 @@ function Room() {
   useEffect(() => {
     if (room.phase !== "playing" || !session) return;
     const iv = setInterval(() => {
-      const alive = engine.status !== "over";
+      const alive = engine.status === "playing" && !joinedLate;
       room.broadcast({
         type: "status",
         playerId: session.playerId,
@@ -180,11 +198,11 @@ function Room() {
         board: encodeVisible(snap.board),
       } as NetEvent);
       room.updatePresence({ score: snap.score, lines: snap.lines, level: snap.level, alive });
-      if (!alive && !eliminatedRef.current) handleGameOver({});
+      if (!alive && !joinedLate && !eliminatedRef.current) handleGameOver({});
     }, 500);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room.phase, snap.score, snap.lines, snap.level, snap.status, battle.pendingTotal]);
+  }, [room.phase, snap.score, snap.lines, snap.level, snap.status, battle.pendingTotal, joinedLate]);
 
   // net events
   useEffect(() => {
@@ -259,14 +277,19 @@ function Room() {
   if (!session) return <NameModal roomCode={code} onDone={setName} />;
 
   const startGame = () => {
+    const startAt = Date.now() + 3500;
+    const seed = Math.floor(Math.random() * 2 ** 31);
     const order = [...room.playlist.map((t) => t.id)].sort(() => Math.random() - 0.5);
+    // Host sets its own countdown state too (broadcast is self:false).
+    room.setPendingStart({ startAt, seed });
+    room.setSeed(seed);
+    room.setPhase("countdown");
     room.broadcast({
       type: "game_start",
-      startAt: Date.now() + 3500,
-      seed: Math.floor(Math.random() * 2 ** 31),
+      startAt,
+      seed,
       playlistOrder: order,
     });
-    room.setPhase("countdown");
   };
 
   const addTrack = (t: PlaylistTrack) => {
@@ -447,9 +470,28 @@ function Room() {
       : battle.targetMode === "ATTACKERS"
         ? "ATTACKERS"
         : `${displayNames.get(battle.targetId ?? "") ?? "—"}`;
-  const spectateCandidates = room.peers.filter((p) => peerAlive(p.playerId));
-  const focusId = dead ? (spectateId && peerAlive(spectateId) ? spectateId : (spectateCandidates[0]?.playerId ?? null)) : null;
-  const focusBoard = focusId ? peerStatus[focusId]?.board : undefined;
+  const spectating = dead || joinedLate;
+  const candidates = useMemo(
+    () =>
+      room.peers
+        .filter((p) => peerAlive(p.playerId))
+        .map((p) => {
+          const s = peerStatus[p.playerId];
+          return {
+            id: p.playerId,
+            label: displayNames.get(p.playerId) ?? p.name,
+            score: s?.score ?? 0,
+            lines: s?.lines ?? 0,
+            level: s?.level ?? 1,
+            pending: s?.pending ?? 0,
+            board: s?.board,
+          };
+        }),
+    [room.peers, peerAlive, peerStatus, displayNames]
+  );
+  const focusId = spectating
+    ? (spectateId && peerAlive(spectateId) ? spectateId : (candidates[0]?.id ?? null))
+    : null;
 
   return (
     <main className="mx-auto max-w-6xl px-3 py-4">
@@ -602,30 +644,22 @@ function Room() {
       </div>
       <TouchControls onAction={action} />
 
-      {/* spectator focus */}
-      {dead && focusId && (
-        <section className="panel panel-sharp mx-auto mt-4 max-w-md p-3 text-center">
-          <div className="text-xs tracking-[0.3em] text-slate-300">
-            SPECTATING {displayNames.get(focusId)} · SURVIVORS {aliveCount}
-          </div>
-          <div className="mt-2 flex justify-center gap-2">
-            <button onClick={() => {
-              const ids = spectateCandidates.map((p) => p.playerId);
-              const i = ids.indexOf(focusId);
-              setSpectateId(ids[(i - 1 + ids.length) % ids.length]);
-            }} className="border border-slate-600 px-3 py-1 text-xs">◀ PREV</button>
-            <button onClick={() => {
-              const ids = spectateCandidates.map((p) => p.playerId);
-              const i = ids.indexOf(focusId);
-              setSpectateId(ids[(i + 1) % ids.length]);
-            }} className="border border-slate-600 px-3 py-1 text-xs">NEXT ▶</button>
-          </div>
-          {focusBoard && (
-            <div className="mt-2 flex justify-center">
-              <BoardCanvas board={TetrisEngine.decodeBoard(focusBoard)} active={null} ghostY={null} width={200} showGrid={false} />
-            </div>
+      {/* spectator views: GRID (all survivors) ↔ POV (one player, switchable) */}
+      {spectating && (
+        <>
+          {joinedLate && !dead && (
+            <p className="mx-auto mt-4 max-w-2xl border border-amber-400/50 bg-amber-950/40 px-3 py-2 text-center text-sm text-amber-200">
+              Joined mid-match — spectating until the next game starts. No need to leave.
+            </p>
           )}
-        </section>
+          <SpectatorPanel
+            candidates={candidates}
+            focusId={focusId}
+            onFocus={setSpectateId}
+            survivors={aliveCount}
+            title={joinedLate && !dead ? "SPECTATING (JOINED MID-MATCH)" : "SPECTATING"}
+          />
+        </>
       )}
 
       <section className="mt-6">
@@ -634,7 +668,7 @@ function Room() {
           {(room.peers.length ? room.peers : [{ playerId: session.playerId, name: session.name, joinedAt: 0, alive: true }]).map((p) => {
             const isMe = p.playerId === session.playerId;
             const st = isMe
-              ? { score: snap.score, lines: snap.lines, level: snap.level, alive: snap.status !== "over", pending: battle.pendingTotal }
+              ? { score: snap.score, lines: snap.lines, level: snap.level, alive: engine.status === "playing" && !joinedLate, pending: battle.pendingTotal }
               : (peerStatus[p.playerId] ?? { score: 0, lines: 0, level: 1, alive: true, pending: 0 });
             const el = eliminations[p.playerId];
             const targeted = battle.targetMode === "TARGETED" && battle.targetId === p.playerId;
@@ -645,7 +679,7 @@ function Room() {
                   if (!isMe && peerAlive(p.playerId)) {
                     battle.setTargetMode("TARGETED");
                     battle.setTargetId(p.playerId);
-                    if (dead) setSpectateId(p.playerId);
+                    if (spectating) setSpectateId(p.playerId);
                   }
                 }}
                 className={`panel panel-sharp p-2 text-left text-xs ${!st.alive || el ? "opacity-50" : ""} ${targeted ? "outline outline-2 outline-cyan-300" : ""}`}

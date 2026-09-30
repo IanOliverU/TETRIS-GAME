@@ -91,10 +91,13 @@ export default function BoardCanvas({
         const cell = board[y + HIDDEN_ROWS]?.[x] as Cell | undefined;
         if (cell === 0 || cell === undefined) continue;
         if (cell === "G") {
-          ctx.fillStyle = "#64748b";
+          ctx.fillStyle = "#232b3a";
           ctx.fillRect(x * size + 1, y * size + 1, size - 2, size - 2);
-          ctx.fillStyle = "#94a3b8";
+          ctx.fillStyle = "rgba(255,255,255,0.14)";
           ctx.fillRect(x * size + 2, y * size + 2, size - 4, 3);
+          ctx.strokeStyle = "rgba(0,0,0,0.6)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x * size + 0.5, y * size + 0.5, size - 1, size - 1);
           continue;
         }
         const c = COLORS[cell];

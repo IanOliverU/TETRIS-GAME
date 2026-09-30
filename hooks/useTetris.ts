@@ -16,7 +16,8 @@ export function useTetris(seed?: number, active = true) {
 
   const refresh = useCallback(() => setSnap(engineRef.current!.snapshot()), []);
 
-  const start = useCallback(() => {
+  const start = useCallback((newSeed?: number) => {
+    if (newSeed !== undefined) engineRef.current!.setSeed(newSeed);
     engineRef.current!.start();
     lastDrop.current = performance.now();
     setStarted(true);

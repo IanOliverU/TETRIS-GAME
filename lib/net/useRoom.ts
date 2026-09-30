@@ -137,6 +137,7 @@ export function useRoom({ code, playerId, name, enabled }: UseRoomArgs) {
           break;
         case "game_start":
           setPendingStart({ startAt: evt.startAt, seed: evt.seed });
+          setSeed(evt.seed);
           setPhase("countdown");
           setPlacements([]);
           if (evt.playlistOrder.length) {
@@ -208,9 +209,9 @@ export function useRoom({ code, playerId, name, enabled }: UseRoomArgs) {
 
   return {
     connected, peers, hostId, isHost, phase, setPhase,
-    config, setConfig, seed, chat, sendChat,
+    config, setConfig, seed, setSeed, chat, sendChat,
     playlist, setPlaylist, music, setMusic,
-    pendingStart, placements, notice, roomFull, solo,
+    pendingStart, setPendingStart, placements, notice, roomFull, solo,
     broadcast, updatePresence, channelPrefix: CHANNEL_PREFIX,
   };
 }
