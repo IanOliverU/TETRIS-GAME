@@ -1,11 +1,11 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { SessionProvider, useSession } from "@/lib/session";
+import { useSession } from "@/lib/session";
 import { generateRoomCode, normalizeRoomCode, isValidRoomCode } from "@/lib/room";
 import NameModal from "@/components/NameModal";
 
-function Home() {
+export default function Page() {
   const { session, setName } = useSession();
   const [joinCode, setJoinCode] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -76,13 +76,5 @@ function Home() {
         No accounts. Music: YouTube plays in a visible mini-player; Spotify links open externally.
       </div>
     </main>
-  );
-}
-
-export default function Page() {
-  return (
-    <SessionProvider>
-      <Home />
-    </SessionProvider>
   );
 }

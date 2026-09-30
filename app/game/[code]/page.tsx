@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { SessionProvider, useSession, dedupeNames } from "@/lib/session";
+import { useSession, dedupeNames } from "@/lib/session";
 import { normalizeRoomCode } from "@/lib/room";
 import { useRoom } from "@/lib/net/useRoom";
 import type { NetEvent, PlaylistTrack } from "@/lib/net/protocol";
@@ -338,8 +338,14 @@ function Room() {
           </div>
           <InviteButtons code={code} />
         </header>
-        {!room.connected && (
-          <p className="mt-2 text-sm text-amber-300">Connecting… (solo mode if Supabase env missing)</p>
+        {room.solo && (
+          <p className="mt-2 border border-red-500/60 bg-red-950/50 px-3 py-2 text-sm font-bold text-red-200">
+            SOLO MODE — this deployment has no Supabase keys, so rooms never sync.
+            Add NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel → Redeploy.
+          </p>
+        )}
+        {!room.connected && !room.solo && (
+          <p className="mt-2 text-sm text-amber-300">Connecting…</p>
         )}
         {room.notice && <p className="mt-2 text-sm text-amber-300">{room.notice}</p>}
         {room.roomFull && (
@@ -448,6 +454,11 @@ function Room() {
   return (
     <main className="mx-auto max-w-6xl px-3 py-4">
       {countdownOverlay}
+      {room.solo && (
+        <p className="mb-2 border border-red-500/60 bg-red-950/50 px-3 py-2 text-center text-sm font-bold text-red-200">
+          SOLO MODE — no sync on this deployment. Add Supabase keys in Vercel → Redeploy.
+        </p>
+      )}
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2 text-sm">
         <span className="font-bold tracking-widest">
           TETRIS BATTLE · <span className="font-mono2 text-cyan-300">{code}</span>
@@ -682,9 +693,5 @@ function MiniBoard({ rows }: { rows: string[] }) {
 }
 
 export default function Page() {
-  return (
-    <SessionProvider>
-      <Room />
-    </SessionProvider>
-  );
+  return <Room />;
 }

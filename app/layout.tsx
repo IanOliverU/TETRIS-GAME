@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import Providers from "@/components/Providers";
 
 export const metadata: Metadata = {
   title: "TETRIS BATTLE — Multiplayer Tetris",
@@ -28,7 +29,9 @@ export default function RootLayout({
       </head>
       <body className="bg-void text-slate-100 font-arcade antialiased">
         <div className="bg-grid" aria-hidden />
-        <div className="relative z-10">{children}</div>
+        <div className="relative z-10">
+          <Providers>{children}</Providers>
+        </div>
       </body>
     </html>
   );

@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getSupabase } from "./supabase";
+import { getSupabase, isRealtimeConfigured } from "./supabase";
 import {
   CHANNEL_PREFIX,
   ChatMsg,
@@ -51,6 +51,7 @@ export function useRoom({ code, playerId, name, enabled }: UseRoomArgs) {
 
   const isHost = hostId === playerId;
   const roomFull = peers.length >= config.maxPlayers;
+  const solo = !isRealtimeConfigured();
 
   // deterministic host: lowest joinedAt (ties → lowest playerId)
   const electHost = useCallback((list: PresenceState[]) => {
@@ -209,7 +210,7 @@ export function useRoom({ code, playerId, name, enabled }: UseRoomArgs) {
     connected, peers, hostId, isHost, phase, setPhase,
     config, setConfig, seed, chat, sendChat,
     playlist, setPlaylist, music, setMusic,
-    pendingStart, placements, notice, roomFull,
+    pendingStart, placements, notice, roomFull, solo,
     broadcast, updatePresence, channelPrefix: CHANNEL_PREFIX,
   };
 }
