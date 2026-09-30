@@ -471,24 +471,22 @@ function Room() {
         ? "ATTACKERS"
         : `${displayNames.get(battle.targetId ?? "") ?? "—"}`;
   const spectating = dead || joinedLate;
-  const candidates = useMemo(
-    () =>
-      room.peers
-        .filter((p) => peerAlive(p.playerId))
-        .map((p) => {
-          const s = peerStatus[p.playerId];
-          return {
-            id: p.playerId,
-            label: displayNames.get(p.playerId) ?? p.name,
-            score: s?.score ?? 0,
-            lines: s?.lines ?? 0,
-            level: s?.level ?? 1,
-            pending: s?.pending ?? 0,
-            board: s?.board,
-          };
-        }),
-    [room.peers, peerAlive, peerStatus, displayNames]
-  );
+  // Plain computation (NOT a hook): this section renders after early-returns
+  // for lobby/results, so no hooks may be called down here.
+  const candidates = room.peers
+    .filter((p) => peerAlive(p.playerId))
+    .map((p) => {
+      const s = peerStatus[p.playerId];
+      return {
+        id: p.playerId,
+        label: displayNames.get(p.playerId) ?? p.name,
+        score: s?.score ?? 0,
+        lines: s?.lines ?? 0,
+        level: s?.level ?? 1,
+        pending: s?.pending ?? 0,
+        board: s?.board,
+      };
+    });
   const focusId = spectating
     ? (spectateId && peerAlive(spectateId) ? spectateId : (candidates[0]?.id ?? null))
     : null;
