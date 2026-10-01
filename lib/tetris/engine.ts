@@ -395,10 +395,12 @@ export class TetrisEngine {
       if (difficult) this.b2b = true;
       else if (n > 0) this.b2b = false;
       // remove rows
-      for (const r of [...cleared].sort((p, q) => q - p)) {
-        this.board.splice(r, 1);
-        this.board.unshift(Array<Cell>(COLS).fill(0));
-      }
+      const clearedSet = new Set(cleared);
+      const remainingRows = this.board.filter((_, index) => !clearedSet.has(index));
+      this.board = [
+        ...Array.from({ length: n }, () => Array<Cell>(COLS).fill(0)),
+        ...remainingRows,
+      ];
       this.lines += n;
       this.score += gained;
       const newLevel = Math.floor(this.lines / 10) + 1;

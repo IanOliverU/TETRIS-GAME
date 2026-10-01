@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TetrisEngine, LockResult } from "@/lib/tetris/engine";
-import { calcAttack, cancelQueuedGarbage, nextHoleColumn, type ClearKind } from "@/lib/tetris/garbage";
+import { acceptsAttack, calcAttack, cancelQueuedGarbage, takeReadyGarbage, nextHoleColumn, type ClearKind } from "@/lib/tetris/garbage";
 import type { NetEvent, PresenceState } from "@/lib/net/protocol";
 
 export type TargetMode = "RANDOM" | "ATTACKERS" | "TARGETED";
@@ -52,6 +52,7 @@ export function useBattle(opts: UseBattleOpts) {
   const outbox = useRef<{ toId: string; amount: number }[]>([]);
   const lastAttacker = useRef<{ id: string; at: number } | null>(null);
   const lastInsert = useRef(0);
+  const seenAttacks = useRef(new Set<string>());
   const deferred = useRef<{ item: PendingItem; at: number }[]>([]);
   const peerAliveRef = useRef(peerAlive);
   const onGameOverRef = useRef(onGameOver);
@@ -88,7 +89,7 @@ export function useBattle(opts: UseBattleOpts) {
       // combine per target
       const byTarget = new Map<string, number>();
       for (const o of batch) {
-        if (!peerAliveRef.current(o.toId)) continue;
+        if (o.toId === session.playerId || !peerAliveRef.current(o.toId)) continue;
         byTarget.set(o.toId, (byTarget.get(o.toId) ?? 0) + o.amount);
       }
       for (const [toId, amount] of byTarget) {
@@ -198,8 +199,10 @@ export function useBattle(opts: UseBattleOpts) {
   // ── incoming attack → pending with cap + heat dampening ────────────────────
   const handleIncoming = useCallback(
     (evt: Extract<NetEvent, { type: "attack" }>) => {
-      if (!session || evt.toId !== session.playerId || evt.fromId === session.playerId || !enabled) return;
+      if (!session || !acceptsAttack(session.playerId, evt) || !enabled) return;
       if (engine.status !== "playing") return;
+      if (seenAttacks.current.has(evt.attackId)) return;
+      seenAttacks.current.add(evt.attackId);
       const now = Date.now();
       // heat: >6 received in last 2s → -1 (min 0)
       const recentSum = recentIncoming.current.filter((r) => now - r.at < 2000).reduce((s, r) => s + r.amount, 0);
@@ -251,29 +254,8 @@ export function useBattle(opts: UseBattleOpts) {
       if (pendingRef.current.length === 0 || engine.status !== "playing") return;
       if (now - lastInsert.current < 500) return;
       const g = graceMs(garbageMode);
-      const dueIdx: number[] = [];
-      pendingRef.current.forEach((p, i) => {
-        if (now - p.receivedAt >= g) dueIdx.push(i);
-      });
-      if (dueIdx.length === 0) return;
-      let toInsert = 0;
-      for (const i of dueIdx) toInsert += pendingRef.current[i].amount;
-      toInsert = Math.min(5, toInsert);
-      // consume from oldest
-      const list = [...pendingRef.current];
-      let need = toInsert;
-      while (need > 0 && list.length > 0) {
-        const head = list[0];
-        // only consume due items (receivedAt+grace passed)
-        if (now - head.receivedAt < g) break;
-        if (head.amount <= need) {
-          need -= head.amount;
-          list.shift();
-        } else {
-          list[0] = { ...head, amount: head.amount - need };
-          need = 0;
-        }
-      }
+      const { pending: list, consumed, amount: toInsert } = takeReadyGarbage(pendingRef.current, now, g);
+      if (toInsert === 0) return;
       // holes: chain per row
       const holes: number[] = [];
       for (let i = 0; i < toInsert; i++) {
@@ -282,6 +264,8 @@ export function useBattle(opts: UseBattleOpts) {
       }
       lastInsert.current = now;
       const { gameOver } = engine.addGarbageRows(holes);
+      const source = consumed[consumed.length - 1];
+      lastAttacker.current = { id: source.fromId, at: now };
       setPendingBoth(list);
       refresh();
       if (gameOver) onGameOverRef.current({ lastAttackerId: lastAttacker.current && now - lastAttacker.current.at < 10000 ? lastAttacker.current.id : undefined });

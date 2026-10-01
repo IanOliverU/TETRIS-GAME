@@ -73,6 +73,27 @@ export function makeGarbageRow(hole: number): (0 | "G")[] {
   return Array.from({ length: 10 }, (_, i) => (i === hole ? 0 : "G")) as (0 | "G")[];
 }
 
+export function acceptsAttack(playerId: string, attack: { fromId: string; toId: string; amount: number }): boolean {
+  return attack.toId === playerId && attack.fromId !== playerId &&
+    Number.isSafeInteger(attack.amount) && attack.amount > 0;
+}
+
+/** Consume only eligible rows, even when delayed batches arrive out of order. */
+export function takeReadyGarbage<T extends { amount: number; receivedAt: number }>(
+  pending: T[], now: number, grace: number, limit = 5
+): { pending: T[]; consumed: T[]; amount: number } {
+  const remaining: T[] = [];
+  const consumed: T[] = [];
+  let amount = 0;
+  for (const item of pending) {
+    const take = now - item.receivedAt >= grace ? Math.min(item.amount, limit - amount) : 0;
+    if (take > 0) consumed.push({ ...item, amount: take });
+    if (item.amount > take) remaining.push({ ...item, amount: item.amount - take });
+    amount += take;
+  }
+  return { pending: remaining, consumed, amount };
+}
+
 /** A clear first cancels incoming rows, including rows delayed by the cap. */
 export function cancelQueuedGarbage<T extends { amount: number; receivedAt: number }>(
   attack: number,
