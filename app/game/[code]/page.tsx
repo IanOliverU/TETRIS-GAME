@@ -17,6 +17,8 @@ import BoardCanvas from "@/components/BoardCanvas";
 import PiecePreview from "@/components/PiecePreview";
 import TouchControls from "@/components/TouchControls";
 import SpectatorPanel from "@/components/SpectatorPanel";
+import { useTheme } from "@/lib/theme";
+import { playLineClear } from "@/lib/tetris/audio";
 
 function encodeVisible(board: TetrisEngine["board"]): string[] {
   const map: Record<string, string> = { "0": "0", I: "1", O: "2", T: "3", S: "4", Z: "5", J: "6", L: "7", G: "8" };
@@ -31,9 +33,13 @@ function Room() {
   const router = useRouter();
 
   const [musicOn, setMusicOn] = useState(false);
+  const { soundOn } = useTheme();
   const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
-  const [peerStatus, setPeerStatus] = useState<Record<string, { score: number; lines: number; level: number; alive: boolean; pending: number; board?: string[] }>>({});
+  const [peerStatus, setPeerStatus] = useState<Record<string, { score: number; lines: number; level: number; alive: boolean; pending: number; lives?: number; kos?: number; board?: string[] }>>({});
   const [eliminations, setEliminations] = useState<Record<string, { place: number }>>({});
+  const [lives, setLives] = useState(3);
+  const livesRef = useRef(3);
+  const [kos, setKos] = useState(0);
   const [spectateId, setSpectateId] = useState<string | null>(null);
   const toastId = useRef(0);
 
@@ -50,9 +56,10 @@ function Room() {
     enabled: !!session,
   });
 
-  const { snap, start, action, refresh, setOnLock, engine } = useTetris(
+  const { snap, start, action, setSoftDropHeld, refresh, setOnLock, engine } = useTetris(
     room.seed,
-    room.phase === "playing"
+    room.phase === "playing",
+    soundOn
   );
 
   const displayNames = useMemo(() => {
@@ -95,9 +102,22 @@ function Room() {
 
   // ── elimination ────────────────────────────────────────────────────────────
   const eliminatedRef = useRef(false);
+  const battleResetRef = useRef<() => void>(() => {});
   const handleGameOver = useCallback(
     (info: { lastAttackerId?: string }) => {
       if (!session || eliminatedRef.current) return;
+      if (room.config.gameMode === "knockout") {
+        const nextLives = Math.max(0, livesRef.current - 1);
+        livesRef.current = nextLives;
+        setLives(nextLives);
+        room.broadcast({ type: "knockout", playerId: session.playerId, attackerId: info.lastAttackerId, lives: nextLives });
+        if (nextLives > 0) {
+          battleResetRef.current();
+          start();
+          pushToast(`KNOCKED OUT — ${nextLives} ${nextLives === 1 ? "LIFE" : "LIVES"} LEFT`);
+          return;
+        }
+      }
       eliminatedRef.current = true;
       // engine.status is already 'over' here, so computeAliveCount() excludes self.
       // Place = survivors remaining + 1 (first out in 15p = #15, winner = #1).
@@ -107,7 +127,7 @@ function Room() {
       setEliminations((e) => ({ ...e, [session.playerId]: { place: myPlace } }));
       pushToast(`ELIMINATED — #${myPlace}`);
     },
-    [session, computeAliveCount, room, pushToast]
+    [session, computeAliveCount, room, pushToast, start]
   );
 
   const battle = useBattle({
@@ -123,15 +143,17 @@ function Room() {
     onGameOver: handleGameOver,
     enabled: room.phase === "playing",
   });
+  battleResetRef.current = battle.reset;
 
   // lock → battle (cancel + attack). Also detect lock-out death.
   useEffect(() => {
     setOnLock((res) => {
+      if (soundOn) playLineClear(res.lines);
       battle.handleLock(res);
       refresh();
-      if (res.gameOver) handleGameOver({});
+      if (res.gameOver) handleGameOver({ lastAttackerId: battle.recentAttackerId() });
     });
-  }, [setOnLock, battle, refresh, handleGameOver]);
+  }, [setOnLock, battle, refresh, handleGameOver, soundOn]);
 
   // countdown from shared startAt
   const [count, setCount] = useState<string | null>(null);
@@ -166,6 +188,9 @@ function Room() {
       if (gameIdRef.current === gameId) return;
       gameIdRef.current = gameId;
       eliminatedRef.current = false;
+      livesRef.current = 3;
+      setLives(3);
+      setKos(0);
       setJoinedLate(false);
       battle.reset();
       setEliminations({});
@@ -175,6 +200,9 @@ function Room() {
     }
     if (room.phase === "lobby") {
       eliminatedRef.current = false;
+      livesRef.current = 3;
+      setLives(3);
+      setKos(0);
       gameIdRef.current = null;
       setJoinedLate(false);
       battle.reset();
@@ -195,14 +223,16 @@ function Room() {
         level: snap.level,
         alive,
         pending: battle.pendingTotal,
+        lives,
+        kos,
         board: encodeVisible(snap.board),
       } as NetEvent);
       room.updatePresence({ score: snap.score, lines: snap.lines, level: snap.level, alive });
-      if (!alive && !joinedLate && !eliminatedRef.current) handleGameOver({});
+      if (!alive && !joinedLate && !eliminatedRef.current) handleGameOver({ lastAttackerId: battle.recentAttackerId() });
     }, 500);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room.phase, snap.score, snap.lines, snap.level, snap.status, battle.pendingTotal, joinedLate]);
+  }, [room.phase, snap.score, snap.lines, snap.level, snap.status, battle.pendingTotal, joinedLate, lives, kos]);
 
   // net events
   useEffect(() => {
@@ -211,8 +241,14 @@ function Room() {
       if (evt.type === "status") {
         setPeerStatus((p) => ({
           ...p,
-          [evt.playerId]: { score: evt.score, lines: evt.lines, level: evt.level, alive: evt.alive, pending: evt.pending, board: evt.board },
+          [evt.playerId]: { score: evt.score, lines: evt.lines, level: evt.level, alive: evt.alive, pending: evt.pending, lives: evt.lives, kos: evt.kos, board: evt.board },
         }));
+      } else if (evt.type === "knockout") {
+        if (session && evt.attackerId === session.playerId && evt.playerId !== session.playerId) {
+          setKos((n) => n + 1);
+          pushToast(`KNOCKOUT! ${displayNames.get(evt.playerId) ?? "Player"}`);
+        }
+        setPeerStatus((p) => p[evt.playerId] ? ({ ...p, [evt.playerId]: { ...p[evt.playerId], lives: evt.lives } }) : p);
       } else if (evt.type === "attack") {
         battle.handleIncoming(evt);
       } else if (evt.type === "eliminated") {
@@ -225,20 +261,24 @@ function Room() {
     return () => window.removeEventListener("tetris-net", h);
   }, [battle, displayNames, pushToast]);
 
-  // host declares winner: last alive → game_end
+  // Host declares winner after the last opponent is out.
   const aliveCount = computeAliveCount();
+  const endTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!room.isHost || room.phase !== "playing") return;
-    if (aliveCount === 1 || aliveCount === 0) {
+    if (!room.isHost || room.phase !== "playing" || (aliveCount > 1 && room.peers.length > 1)) {
+      if (endTimerRef.current) clearTimeout(endTimerRef.current);
+      endTimerRef.current = null;
+      return;
+    }
+    if (endTimerRef.current) return;
+    if (aliveCount === 0 || (aliveCount === 1 && room.peers.length > 1)) {
       const ids = new Set(room.peers.map((p) => p.playerId));
       if (session) ids.add(session.playerId);
       const scoreOf = (id: string) =>
         id === session?.playerId ? snap.score : (peerStatus[id]?.score ?? 0);
       // winner = the one alive (or highest score if 0)
       let winner: string | null = null;
-      ids.forEach((id) => {
-        if (!eliminations[id]) winner = winner ?? id;
-      });
+      ids.forEach((id) => { if (peerAlive(id)) winner = id; });
       if (!winner) {
         let best = -1;
         ids.forEach((id) => {
@@ -252,13 +292,14 @@ function Room() {
         place: id === winner ? 1 : (eliminations[id]?.place ?? total),
       }));
       // fix simultaneous-death ties by score
-      const t = setTimeout(() => {
+      endTimerRef.current = setTimeout(() => {
+        endTimerRef.current = null;
         room.broadcast({ type: "game_end", winnerId: winner, placements });
         room.setPhase("results");
       }, 1200);
-      return () => clearTimeout(t);
     }
-  }, [aliveCount, room, session, snap.score, peerStatus, eliminations]);
+  }, [aliveCount, room, session, snap.score, peerStatus, eliminations, peerAlive]);
+  useEffect(() => () => { if (endTimerRef.current) clearTimeout(endTimerRef.current); }, []);
 
   // targeting keys T/Q/E (disabled while typing)
   useEffect(() => {
@@ -280,6 +321,8 @@ function Room() {
     const startAt = Date.now() + 3500;
     const seed = Math.floor(Math.random() * 2 ** 31);
     const order = [...room.playlist.map((t) => t.id)].sort(() => Math.random() - 0.5);
+    room.setMusic({ index: 0, startedAt: startAt, isPlaying: order.length > 0, order });
+    room.broadcast({ type: "music_state", index: 0, startedAt: startAt, isPlaying: order.length > 0, order });
     // Host sets its own countdown state too (broadcast is self:false).
     room.setPendingStart({ startAt, seed });
     room.setSeed(seed);
@@ -289,6 +332,7 @@ function Room() {
       startAt,
       seed,
       playlistOrder: order,
+      gameMode: room.config.gameMode,
     });
   };
 
@@ -310,6 +354,7 @@ function Room() {
         place: room.placements.find((p) => p.playerId === id)?.place ?? eliminations[id]?.place ?? 99,
         score: id === session.playerId ? snap.score : (peerStatus[id]?.score ?? 0),
         lines: id === session.playerId ? snap.lines : (peerStatus[id]?.lines ?? 0),
+        kos: id === session.playerId ? kos : (peerStatus[id]?.kos ?? 0),
       }))
       .sort((a, b) => a.place - b.place || b.score - a.score);
     const medal = (i: number) => (i === 0 ? "🏆" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i + 1}`);
@@ -322,7 +367,7 @@ function Room() {
             {rows.map((r, i) => (
               <div key={r.id} className="flex justify-between border border-white/10 px-3 py-2 text-sm">
                 <span>{medal(i)} {r.label}</span>
-                <span className="font-mono2">{r.score.toLocaleString()} · {r.lines}ln</span>
+                 <span className="font-mono2">{room.config.gameMode === "knockout" ? `${r.kos} KO · ` : ""}{r.score.toLocaleString()} · {r.lines}ln</span>
               </div>
             ))}
           </div>
@@ -342,7 +387,7 @@ function Room() {
   }
 
   const countdownOverlay = room.phase === "countdown" && (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70">
+    <div className="countdown-overlay fixed inset-0 z-40 flex items-center justify-center">
       <div key={count} className="count-pop text-glow text-8xl font-bold text-cyan-300">
         {count ?? "…"}
       </div>
@@ -395,7 +440,7 @@ function Room() {
               ))}
             </div>
             {room.isHost && (
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+               <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                 <label className="border border-white/10 p-2">
                   MAX PLAYERS
                   <select
@@ -422,6 +467,17 @@ function Room() {
                     <option value="spicy">Spicy (+1)</option>
                   </select>
                 </label>
+                <label className="col-span-2 border border-white/10 p-2">
+                  GAME MODE
+                  <select
+                    value={room.config.gameMode}
+                    onChange={(e) => room.setConfig({ ...room.config, gameMode: e.target.value as "survival" | "knockout" })}
+                    className="mt-1 w-full bg-black p-1"
+                  >
+                    <option value="survival">Survival — one life</option>
+                    <option value="knockout">Knockout — three lives, earn KOs</option>
+                  </select>
+                </label>
               </div>
             )}
             <button
@@ -432,7 +488,7 @@ function Room() {
               {room.isHost ? "START GAME" : "WAITING FOR HOST..."}
             </button>
             <p className="mt-2 text-[11px] text-slate-500">
-              Battle: Single 0 · Double 1 · Triple 2 · Quad 4 · TSPIN 2/4/6 · B2B +1 · Combo +1~3 (cap 8).
+              Battle: Single 1 · Double 1 · Triple 2 · Quad 4 · TSPIN 2/4/6 · B2B +1 · Combo +1~3 (cap 8).
               Pending 1000ms grace, auto-cancel 1:1, max 5 rows/500ms.
             </p>
           </div>
@@ -504,7 +560,7 @@ function Room() {
           TETRIS BATTLE · <span className="font-mono2 text-cyan-300">{code}</span>
         </span>
         <span>
-          SURVIVORS: {aliveCount} · SCORE {snap.score.toLocaleString()} · LV {snap.level}
+           SURVIVORS: {aliveCount} · {room.config.gameMode === "knockout" ? `${lives} LIVES · ${kos} KO · ` : ""}SCORE {snap.score.toLocaleString()} · LV {snap.level}
         </span>
         <div className="flex items-center gap-2">
           <button
@@ -565,7 +621,7 @@ function Room() {
         </div>
 
         <div className="hidden lg:block">
-          <div className="border-2 border-slate-200/90 bg-[#0d1322] p-3 text-center" style={{ width: 120 }}>
+          <div className="game-side-panel border-2 p-3 text-center" style={{ width: 120 }}>
             <div className="text-[11px] tracking-[0.25em] text-slate-300">HOLD</div>
             <div className="flex h-16 items-center justify-center">
               <PiecePreview type={snap.hold} cell={13} dim={!snap.canHold} />
@@ -607,7 +663,7 @@ function Room() {
         </div>
 
         <div className="hidden lg:block">
-          <div className="border-2 border-slate-200/90 bg-[#0d1322]" style={{ width: 132 }}>
+          <div className="game-side-panel border-2" style={{ width: 132 }}>
             <div className="border-b-2 border-slate-200/90 px-2 py-1 text-center text-[11px] tracking-[0.25em]">NEXT</div>
             {next5.map((t, i) => (
               <div key={i} className={`flex h-[74px] items-center justify-center ${i < 4 ? "border-b border-slate-200/40" : ""}`}>
@@ -640,7 +696,19 @@ function Room() {
         <button onClick={() => { battle.setTargetMode("TARGETED"); battle.cycleTarget(-1); }} className="border border-slate-600 px-3 text-xs">◀</button>
         <button onClick={() => { battle.setTargetMode("TARGETED"); battle.cycleTarget(1); }} className="border border-slate-600 px-3 text-xs">▶</button>
       </div>
-      <TouchControls onAction={action} />
+      <TouchControls onAction={action} onSoftDropHeld={setSoftDropHeld} />
+
+      <div className="mx-auto mt-4 w-fit max-w-full">
+        <MusicPlayer
+          tracks={room.playlist}
+          order={room.music.order}
+          index={room.music.index}
+          startedAt={room.music.startedAt}
+          isPlaying={room.music.isPlaying}
+          enabled={musicOn}
+          onEnable={() => setMusicOn(true)}
+        />
+      </div>
 
       {/* spectator views: GRID (all survivors) ↔ POV (one player, switchable) */}
       {spectating && (
@@ -662,12 +730,12 @@ function Room() {
 
       <section className="mt-6">
         <h2 className="text-xs font-bold tracking-[0.3em] text-slate-300">PLAYERS — SURVIVORS {aliveCount}</h2>
-        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
           {(room.peers.length ? room.peers : [{ playerId: session.playerId, name: session.name, joinedAt: 0, alive: true }]).map((p) => {
             const isMe = p.playerId === session.playerId;
             const st = isMe
-              ? { score: snap.score, lines: snap.lines, level: snap.level, alive: engine.status === "playing" && !joinedLate, pending: battle.pendingTotal }
-              : (peerStatus[p.playerId] ?? { score: 0, lines: 0, level: 1, alive: true, pending: 0 });
+              ? { score: snap.score, lines: snap.lines, level: snap.level, alive: engine.status === "playing" && !joinedLate, pending: battle.pendingTotal, lives, kos }
+              : (peerStatus[p.playerId] ?? { score: 0, lines: 0, level: 1, alive: true, pending: 0, lives: 3, kos: 0 });
             const el = eliminations[p.playerId];
             const targeted = battle.targetMode === "TARGETED" && battle.targetId === p.playerId;
             return (
@@ -680,19 +748,22 @@ function Room() {
                     if (spectating) setSpectateId(p.playerId);
                   }
                 }}
-                className={`panel panel-sharp p-2 text-left text-xs ${!st.alive || el ? "opacity-50" : ""} ${targeted ? "outline outline-2 outline-cyan-300" : ""}`}
+                className={`panel panel-sharp flex min-h-[132px] items-start justify-between gap-3 p-3 text-left text-sm ${!st.alive || el ? "opacity-50" : ""} ${targeted ? "outline outline-2 outline-cyan-300" : ""}`}
               >
-                <div className="flex justify-between font-bold">
-                  <span>{el ? `☠ #${el.place}` : "●"} {displayNames.get(p.playerId) ?? p.name}</span>
-                  {p.playerId === room.hostId && <span className="text-amber-300">HOST</span>}
-                </div>
-                <div className="mt-1 font-mono2 text-slate-400">
-                  {st.score.toLocaleString()} · L{st.level} · {el ? "OUT" : `${"pending" in st && (st as { pending: number }).pending > 0 ? `☠+${(st as { pending: number }).pending} · ` : ""}${st.lines}ln`}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2 font-bold">
+                    <span className="truncate">{el ? `☠ #${el.place}` : "●"} {displayNames.get(p.playerId) ?? p.name}</span>
+                    {p.playerId === room.hostId && <span className="text-xs text-amber-300">HOST</span>}
+                  </div>
+                  <div className="mt-2 font-mono2 text-xs text-slate-400">
+                    {st.score.toLocaleString()} · L{st.level} · {el ? "OUT" : `${"pending" in st && st.pending > 0 ? `☠+${st.pending} · ` : ""}${st.lines}ln`}
+                  </div>
+                  {room.config.gameMode === "knockout" && <div className="mt-2 font-mono2 text-xs text-cyan-300">{st.lives ?? 3} LIVES · {st.kos ?? 0} KO</div>}
+                  {isMe && <div className="mt-2 text-xs text-slate-500">YOU · {battle.targetMode}</div>}
                 </div>
                 {!isMe && peerStatus[p.playerId]?.board && (
                   <MiniBoard rows={peerStatus[p.playerId].board!} />
                 )}
-                {isMe && <div className="mt-1 text-[10px] text-slate-500">YOU · {battle.targetMode}</div>}
               </button>
             );
           })}
@@ -718,8 +789,8 @@ function Room() {
 function MiniBoard({ rows }: { rows: string[] }) {
   const board = useMemo(() => TetrisEngine.decodeBoard(rows), [rows]);
   return (
-    <div className="mt-1">
-      <BoardCanvas board={board} active={null} ghostY={null} width={110} showGrid={false} />
+    <div className="shrink-0">
+      <BoardCanvas board={board} active={null} ghostY={null} width={58} showGrid={false} />
     </div>
   );
 }

@@ -13,7 +13,7 @@ export function baseAttack(kind: ClearKind): number {
   if (!kind.tspin) {
     switch (kind.lines) {
       case 0: return 0;
-      case 1: return 0;
+      case 1: return 1;
       case 2: return 1;
       case 3: return 2;
       case 4: return 4;
@@ -71,4 +71,32 @@ export function nextHoleColumn(
 
 export function makeGarbageRow(hole: number): (0 | "G")[] {
   return Array.from({ length: 10 }, (_, i) => (i === hole ? 0 : "G")) as (0 | "G")[];
+}
+
+/** A clear first cancels incoming rows, including rows delayed by the cap. */
+export function cancelQueuedGarbage<T extends { amount: number; receivedAt: number }>(
+  attack: number,
+  pending: T[],
+  deferred: { item: T; at: number }[]
+): { pending: T[]; deferred: { item: T; at: number }[]; remaining: number; cancelled: number } {
+  let remaining = attack;
+  let cancelled = 0;
+  const nextPending: T[] = [];
+  const nextDeferred: { item: T; at: number }[] = [];
+  const queue = [
+    ...pending.map((item) => ({ item, at: item.receivedAt, delayed: false })),
+    ...deferred.map(({ item, at }) => ({ item, at, delayed: true })),
+  ].sort((a, b) => a.item.receivedAt - b.item.receivedAt);
+  for (const entry of queue) {
+    const used = Math.min(remaining, entry.item.amount);
+    remaining -= used;
+    cancelled += used;
+    const amount = entry.item.amount - used;
+    if (amount > 0) {
+      const item = { ...entry.item, amount };
+      if (entry.delayed) nextDeferred.push({ item, at: entry.at });
+      else nextPending.push(item);
+    }
+  }
+  return { pending: nextPending, deferred: nextDeferred, remaining, cancelled };
 }

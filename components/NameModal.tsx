@@ -27,7 +27,7 @@ export default function NameModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+    <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="panel panel-sharp w-full max-w-md p-8 text-center">
         <div className="text-xs tracking-[0.35em] text-cyan-300/80">TETRIS BATTLE</div>
         <h1 className="mt-2 text-3xl font-bold tracking-wide">

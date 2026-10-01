@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { COLS, ROWS, HIDDEN_ROWS, COLORS, type Cell } from "@/lib/tetris/constants";
 import type { ActivePiece } from "@/lib/tetris/engine";
 import { SHAPES } from "@/lib/tetris/constants";
+import { useTheme, type BlockStyle } from "@/lib/theme";
 
 function drawCell(
   ctx: CanvasRenderingContext2D,
@@ -11,6 +12,7 @@ function drawCell(
   size: number,
   color: string,
   dark: string,
+  style: BlockStyle,
   ghost = false
 ) {
   const px = x * size;
@@ -21,6 +23,24 @@ function drawCell(
     ctx.lineWidth = Math.max(1, size * 0.08);
     ctx.strokeRect(px + 1, py + 1, size - 2, size - 2);
     ctx.globalAlpha = 1;
+    return;
+  }
+  if (style === "flat") {
+    ctx.fillStyle = color;
+    ctx.fillRect(px + 1, py + 1, size - 2, size - 2);
+    ctx.strokeStyle = dark;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + 1.5, py + 1.5, size - 3, size - 3);
+    return;
+  }
+  if (style === "outline") {
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = color;
+    ctx.fillRect(px + 1, py + 1, size - 2, size - 2);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(2, size * 0.1);
+    ctx.strokeRect(px + 2, py + 2, size - 4, size - 4);
     return;
   }
   const g = ctx.createLinearGradient(px, py, px, py + size);
@@ -51,6 +71,7 @@ export default function BoardCanvas({
   showGrid?: boolean;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const { theme, blockStyle } = useTheme();
   const size = width / COLS;
   const height = size * ROWS;
 
@@ -64,11 +85,12 @@ export default function BoardCanvas({
     if (!ctx) return;
     ctx.scale(dpr, dpr);
 
-    ctx.fillStyle = "#05080f";
+    const styles = getComputedStyle(document.documentElement);
+    ctx.fillStyle = styles.getPropertyValue("--board").trim() || "#071321";
     ctx.fillRect(0, 0, width, height);
 
     if (showGrid) {
-      ctx.strokeStyle = "rgba(148,163,184,0.12)";
+      ctx.strokeStyle = styles.getPropertyValue("--board-grid").trim() || "rgba(148,163,184,0.12)";
       ctx.lineWidth = 1;
       for (let x = 1; x < COLS; x++) {
         ctx.beginPath();
@@ -91,13 +113,13 @@ export default function BoardCanvas({
         const cell = board[y + HIDDEN_ROWS]?.[x] as Cell | undefined;
         if (cell === 0 || cell === undefined) continue;
         if (cell === "G") {
-          ctx.fillStyle = "#232b3a";
+          ctx.fillStyle = "#8b929b";
           ctx.fillRect(x * size + 1, y * size + 1, size - 2, size - 2);
-          ctx.fillStyle = "rgba(255,255,255,0.14)";
-          ctx.fillRect(x * size + 2, y * size + 2, size - 4, 3);
-          ctx.strokeStyle = "rgba(0,0,0,0.6)";
-          ctx.lineWidth = 1;
-          ctx.strokeRect(x * size + 0.5, y * size + 0.5, size - 1, size - 1);
+          ctx.fillStyle = "#b8bec6";
+          ctx.fillRect(x * size + 2, y * size + 2, size - 4, Math.max(2, size * 0.16));
+          ctx.strokeStyle = "#343a43";
+          ctx.lineWidth = Math.max(1, size * 0.06);
+          ctx.strokeRect(x * size + 1, y * size + 1, size - 2, size - 2);
           continue;
         }
         const c = COLORS[cell];
@@ -105,7 +127,7 @@ export default function BoardCanvas({
           ctx.fillStyle = "#ffffff";
           ctx.fillRect(x * size, y * size, size, size);
         } else {
-          drawCell(ctx, x, y, size, c.main, c.dark);
+          drawCell(ctx, x, y, size, c.main, c.dark, blockStyle);
         }
       }
     }
@@ -121,7 +143,7 @@ export default function BoardCanvas({
             const bx = active.x + x;
             const by = ghostY + y - HIDDEN_ROWS;
             if (by < 0) continue;
-            drawCell(ctx, bx, by, size, c.main, c.dark, true);
+            drawCell(ctx, bx, by, size, c.main, c.dark, blockStyle, true);
           }
       }
       // active with glow
@@ -133,17 +155,17 @@ export default function BoardCanvas({
           const bx = active.x + x;
           const by = active.y + y - HIDDEN_ROWS;
           if (by < 0) continue;
-          drawCell(ctx, bx, by, size, c.main, c.dark);
+          drawCell(ctx, bx, by, size, c.main, c.dark, blockStyle);
         }
       ctx.shadowBlur = 0;
     }
-  });
+  }, [board, active, ghostY, clearingRows, width, height, showGrid, size, theme, blockStyle]);
 
   return (
     <canvas
       ref={ref}
       style={{ width, height }}
-      className="block border-2 border-slate-200/90 bg-black shadow-[0_0_30px_rgba(0,0,0,0.6)]"
+      className="game-board block border-2"
     />
   );
 }

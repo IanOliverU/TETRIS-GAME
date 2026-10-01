@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TetrisEngine, LockResult } from "@/lib/tetris/engine";
-import { calcAttack, nextHoleColumn, type ClearKind } from "@/lib/tetris/garbage";
+import { calcAttack, cancelQueuedGarbage, nextHoleColumn, type ClearKind } from "@/lib/tetris/garbage";
 import type { NetEvent, PresenceState } from "@/lib/net/protocol";
 
 export type TargetMode = "RANDOM" | "ATTACKERS" | "TARGETED";
@@ -33,7 +33,7 @@ function graceMs(mode: "chill" | "normal" | "spicy"): number {
 }
 
 function scaleAttack(total: number, lines: number, mode: "chill" | "normal" | "spicy"): number {
-  if (mode === "chill") return Math.min(6, Math.floor(total * 0.5));
+  if (mode === "chill") return total > 0 ? Math.min(6, Math.max(1, Math.floor(total * 0.5))) : 0;
   if (mode === "spicy") return Math.min(8, total + (lines >= 2 ? 1 : 0));
   return total;
 }
@@ -41,6 +41,7 @@ function scaleAttack(total: number, lines: number, mode: "chill" | "normal" | "s
 export function useBattle(opts: UseBattleOpts) {
   const { engine, refresh, session, peers, peerAlive, garbageMode, broadcast, pushToast, displayNameOf, onGameOver, enabled } = opts;
   const [pending, setPending] = useState<PendingItem[]>([]);
+  const [delayed, setDelayed] = useState<{ item: PendingItem; at: number }[]>([]);
   const [targetMode, setTargetMode] = useState<TargetMode>("RANDOM");
   const [targetId, setTargetId] = useState<string | null>(null);
   const pendingRef = useRef<PendingItem[]>([]);
@@ -49,11 +50,18 @@ export function useBattle(opts: UseBattleOpts) {
   const lastTargets = useRef<string[]>([]);
   const holePrev = useRef<number | null>(null);
   const outbox = useRef<{ toId: string; amount: number }[]>([]);
-  const lastAttacker = useRef<string | undefined>(undefined);
+  const lastAttacker = useRef<{ id: string; at: number } | null>(null);
   const lastInsert = useRef(0);
   const deferred = useRef<{ item: PendingItem; at: number }[]>([]);
+  const peerAliveRef = useRef(peerAlive);
+  const onGameOverRef = useRef(onGameOver);
+  peerAliveRef.current = peerAlive;
+  onGameOverRef.current = onGameOver;
 
-  const pendingTotal = useMemo(() => pending.reduce((s, p) => s + p.amount, 0), [pending]);
+  const pendingTotal = useMemo(
+    () => pending.reduce((s, p) => s + p.amount, 0) + delayed.reduce((s, d) => s + d.item.amount, 0),
+    [pending, delayed]
+  );
 
   const setPendingBoth = useCallback((list: PendingItem[]) => {
     pendingRef.current = list;
@@ -80,7 +88,7 @@ export function useBattle(opts: UseBattleOpts) {
       // combine per target
       const byTarget = new Map<string, number>();
       for (const o of batch) {
-        if (!peerAlive(o.toId)) continue; // dead → drop (sender re-routes next time)
+        if (!peerAliveRef.current(o.toId)) continue;
         byTarget.set(o.toId, (byTarget.get(o.toId) ?? 0) + o.amount);
       }
       for (const [toId, amount] of byTarget) {
@@ -96,7 +104,7 @@ export function useBattle(opts: UseBattleOpts) {
       }
     }, 250);
     return () => clearInterval(iv);
-  }, [enabled, broadcast, peerAlive, session]);
+  }, [enabled, broadcast, session]);
 
   // ── target resolution ──────────────────────────────────────────────────────
   const resolveTargets = useCallback(
@@ -165,44 +173,32 @@ export function useBattle(opts: UseBattleOpts) {
       let total = scaleAttack(calc.total, res.lines, garbageMode);
       if (total <= 0) return;
 
-      // 1) cancel own pending first (oldest first), 1:1
-      let remaining = total;
-      let cancelled = 0;
-      if (pendingRef.current.length > 0) {
-        const list = [...pendingRef.current];
-        while (remaining > 0 && list.length > 0) {
-          const head = list[0];
-          if (head.amount <= remaining) {
-            remaining -= head.amount;
-            cancelled += head.amount;
-            list.shift();
-          } else {
-            head.amount -= remaining;
-            cancelled += remaining;
-            remaining = 0;
-          }
-        }
-        setPendingBoth(list);
-        if (cancelled > 0) {
-          pushToast(cancelled >= total ? "BLOCKED!" : `-${cancelled} CANCELLED`);
-        }
+      // Cancel all incoming, including overflow waiting in the delayed queue.
+      const { pending: nextPending, deferred: nextDeferred, remaining, cancelled } =
+        cancelQueuedGarbage(total, pendingRef.current, deferred.current);
+      if (cancelled > 0) {
+        deferred.current = nextDeferred;
+        setDelayed(nextDeferred);
+        setPendingBoth(nextPending);
+        pushToast(cancelled >= total ? "BLOCKED!" : `-${cancelled} CANCELLED`);
       }
       if (remaining <= 0) return; // fully defended
 
-      // 2) route remainder
+      // Route only the uncancelled remainder to another live player.
       const targets = resolveTargets(remaining);
+      if (targets.length === 0) return;
       // re-route check: if TARGETED died mid-flight, resolveTargets already fell back
       for (const t of targets) outbox.current.push(t);
       const label = targets.map((t) => `${displayNameOf(t.toId)} +${t.amount}`).join(", ");
       pushToast(`+${remaining} GARBAGE → ${label}`);
     },
-    [session, enabled, garbageMode, broadcast, resolveTargets, displayNameOf, pushToast, setPendingBoth]
+    [session, enabled, garbageMode, resolveTargets, displayNameOf, pushToast, setPendingBoth]
   );
 
   // ── incoming attack → pending with cap + heat dampening ────────────────────
   const handleIncoming = useCallback(
     (evt: Extract<NetEvent, { type: "attack" }>) => {
-      if (!session || evt.toId !== session.playerId || !enabled) return;
+      if (!session || evt.toId !== session.playerId || evt.fromId === session.playerId || !enabled) return;
       if (engine.status !== "playing") return;
       const now = Date.now();
       // heat: >6 received in last 2s → -1 (min 0)
@@ -214,7 +210,7 @@ export function useBattle(opts: UseBattleOpts) {
       recentIncoming.current = recentIncoming.current.filter((r) => now - r.at < 5000);
       recentAttackers.current.push({ fromId: evt.fromId, fromName: evt.fromName, at: now });
       recentAttackers.current = recentAttackers.current.slice(-12);
-      lastAttacker.current = evt.fromId;
+      lastAttacker.current = { id: evt.fromId, at: now };
 
       const cur = pendingRef.current.reduce((s, p) => s + p.amount, 0);
       const CAP = 8;
@@ -227,6 +223,7 @@ export function useBattle(opts: UseBattleOpts) {
         if (excess > 0) {
           // defer overflow 1500ms (still threatens, but survivable)
           deferred.current.push({ item: { attackId: evt.attackId + ":d", fromId: evt.fromId, fromName: evt.fromName, amount: excess, receivedAt: now + 1500 }, at: now + 1500 });
+          setDelayed([...deferred.current]);
           pushToast(`INCOMING +${accept} from ${evt.fromName} (+${excess} delayed)`);
         } else {
           pushToast(`INCOMING +${accept} from ${evt.fromName}`);
@@ -248,6 +245,7 @@ export function useBattle(opts: UseBattleOpts) {
       const due0 = deferred.current.filter((d) => d.at <= now);
       if (due0.length) {
         deferred.current = deferred.current.filter((d) => d.at > now);
+        setDelayed([...deferred.current]);
         setPendingBoth([...pendingRef.current, ...due0.map((d) => ({ ...d.item, receivedAt: now }))]);
       }
       if (pendingRef.current.length === 0 || engine.status !== "playing") return;
@@ -272,7 +270,7 @@ export function useBattle(opts: UseBattleOpts) {
           need -= head.amount;
           list.shift();
         } else {
-          head.amount -= need;
+          list[0] = { ...head, amount: head.amount - need };
           need = 0;
         }
       }
@@ -286,10 +284,10 @@ export function useBattle(opts: UseBattleOpts) {
       const { gameOver } = engine.addGarbageRows(holes);
       setPendingBoth(list);
       refresh();
-      if (gameOver) onGameOver({ lastAttackerId: lastAttacker.current });
+      if (gameOver) onGameOverRef.current({ lastAttackerId: lastAttacker.current && now - lastAttacker.current.at < 10000 ? lastAttacker.current.id : undefined });
     }, 120);
     return () => clearInterval(iv);
-  }, [enabled, engine, garbageMode, refresh, setPendingBoth, onGameOver]);
+  }, [enabled, engine, garbageMode, refresh, setPendingBoth]);
 
   const reset = useCallback(() => {
     setPendingBoth([]);
@@ -300,18 +298,25 @@ export function useBattle(opts: UseBattleOpts) {
     holePrev.current = null;
     outbox.current = [];
     deferred.current = [];
-    lastAttacker.current = undefined;
+    setDelayed([]);
+    lastAttacker.current = null;
+    lastInsert.current = 0;
   }, [setPendingBoth]);
+
+  const recentAttackerId = useCallback(() => {
+    const last = lastAttacker.current;
+    return last && Date.now() - last.at < 10000 ? last.id : undefined;
+  }, []);
 
   const grouped = useMemo(() => {
     const m = new Map<string, { name: string; amount: number }>();
-    for (const p of pending) {
+    for (const p of [...pending, ...delayed.map((d) => d.item)]) {
       const e = m.get(p.fromId) ?? { name: p.fromName, amount: 0 };
       e.amount += p.amount;
       m.set(p.fromId, e);
     }
     return Array.from(m.values());
-  }, [pending]);
+  }, [pending, delayed]);
 
   const cycleMode = useCallback(() => {
     setTargetMode((m) => (m === "RANDOM" ? "ATTACKERS" : m === "ATTACKERS" ? "TARGETED" : "RANDOM"));
@@ -344,6 +349,6 @@ export function useBattle(opts: UseBattleOpts) {
     pending, pendingTotal, grouped,
     targetMode, setTargetMode, cycleMode, targetId, setTargetId, cycleTarget,
     handleLock, handleIncoming, reset,
-    lastAttackerId: lastAttacker.current,
+    recentAttackerId,
   };
 }

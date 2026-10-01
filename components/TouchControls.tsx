@@ -2,8 +2,10 @@
 
 export default function TouchControls({
   onAction,
+  onSoftDropHeld,
 }: {
   onAction: (a: "left" | "right" | "down" | "cw" | "hard" | "hold") => void;
+  onSoftDropHeld?: (held: boolean) => void;
 }) {
   const btn =
     "select-none border border-slate-500/60 bg-white/5 px-4 py-3 text-sm font-bold tracking-widest active:bg-cyan-400/30";
@@ -11,7 +13,11 @@ export default function TouchControls({
     onPointerDown: (e: React.PointerEvent) => {
       e.preventDefault();
       onAction(a);
+      if (a === "down") onSoftDropHeld?.(true);
     },
+    onPointerUp: () => { if (a === "down") onSoftDropHeld?.(false); },
+    onPointerCancel: () => { if (a === "down") onSoftDropHeld?.(false); },
+    onPointerLeave: () => { if (a === "down") onSoftDropHeld?.(false); },
   });
   return (
     <div className="mx-auto mt-3 w-full max-w-sm space-y-2 md:hidden">

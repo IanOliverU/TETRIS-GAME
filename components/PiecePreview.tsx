@@ -1,5 +1,6 @@
 "use client";
 import { COLORS, SHAPES, type TetrominoType } from "@/lib/tetris/constants";
+import { useTheme } from "@/lib/theme";
 
 export default function PiecePreview({
   type,
@@ -10,6 +11,7 @@ export default function PiecePreview({
   cell?: number;
   dim?: boolean;
 }) {
+  const { blockStyle } = useTheme();
   if (!type) return <div className="flex h-full items-center justify-center text-slate-600">—</div>;
   const shape = SHAPES[type][0];
   const rows = shape.length;
@@ -37,9 +39,9 @@ export default function PiecePreview({
               style={{
                 width: cell,
                 height: cell,
-                background: filled ? `linear-gradient(180deg, ${c.main}, ${c.dark})` : "transparent",
-                border: filled ? "1px solid rgba(0,0,0,0.5)" : "none",
-                boxShadow: filled ? `0 0 8px ${c.glow}` : "none",
+                background: !filled ? "transparent" : blockStyle === "bevel" ? `linear-gradient(180deg, ${c.main}, ${c.dark})` : blockStyle === "flat" ? c.main : `${c.main}38`,
+                border: filled ? (blockStyle === "outline" ? `2px solid ${c.main}` : `1px solid ${c.dark}`) : "none",
+                boxShadow: filled && blockStyle === "bevel" ? `0 0 8px ${c.glow}` : "none",
               }}
             />
           );

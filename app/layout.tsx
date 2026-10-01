@@ -14,7 +14,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" data-theme="light">
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
@@ -27,7 +27,7 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="bg-void text-slate-100 font-arcade antialiased">
+      <body className="text-slate-100 font-arcade antialiased">
         <div className="bg-grid" aria-hidden />
         <div className="relative z-10">
           <Providers>{children}</Providers>

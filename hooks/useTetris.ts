@@ -1,10 +1,11 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TetrisEngine, type EngineSnapshot, type LockResult } from "@/lib/tetris/engine";
+import { unlockGameAudio } from "@/lib/tetris/audio";
 
 // Local simulation only. Network layer sends events (attack/eliminated/status),
 // never per-frame positions. Battle manager plugs into onLock.
-export function useTetris(seed?: number, active = true) {
+export function useTetris(seed?: number, active = true, soundOn = true) {
   const engineRef = useRef<TetrisEngine | null>(null);
   if (!engineRef.current) engineRef.current = new TetrisEngine(seed);
   const [snap, setSnap] = useState<EngineSnapshot>(() => engineRef.current!.snapshot());
@@ -13,6 +14,7 @@ export function useTetris(seed?: number, active = true) {
   const lastDrop = useRef(0);
   const lockDelay = useRef(0);
   const das = useRef<{ dir: -1 | 1 | null; start: number; last: number }>({ dir: null, start: 0, last: 0 });
+  const softDrop = useRef<{ held: boolean; last: number }>({ held: false, last: 0 });
 
   const refresh = useCallback(() => setSnap(engineRef.current!.snapshot()), []);
 
@@ -51,6 +53,13 @@ export function useTetris(seed?: number, active = true) {
             refresh();
           }
         }
+        if (softDrop.current.held && t - softDrop.current.last >= 45) {
+          softDrop.current.last = t;
+          if (eng.softDropStep()) {
+            lastDrop.current = t;
+            refresh();
+          }
+        }
         const interval = eng.getIntervalMs();
         const blocked =
           !eng.active ||
@@ -83,12 +92,12 @@ export function useTetris(seed?: number, active = true) {
     (a: "left" | "right" | "down" | "cw" | "ccw" | "hard" | "hold") => {
       const eng = engineRef.current!;
       if (eng.status !== "playing") return;
+      if (soundOn) unlockGameAudio();
       switch (a) {
         case "left": eng.moveLeft(); break;
         case "right": eng.moveRight(); break;
         case "down":
-          if (!eng.softDropStep()) doLock();
-          else lastDrop.current = performance.now();
+          if (eng.softDropStep()) lastDrop.current = performance.now();
           break;
         case "cw": eng.rotateCW(); break;
         case "ccw": eng.rotateCCW(); break;
@@ -102,8 +111,12 @@ export function useTetris(seed?: number, active = true) {
       }
       refresh();
     },
-    [refresh, doLock]
+    [refresh, soundOn]
   );
+
+  const setSoftDropHeld = useCallback((held: boolean) => {
+    softDrop.current = { held, last: performance.now() };
+  }, []);
 
   // keyboard (disabled when typing in inputs or modal open)
   useEffect(() => {
@@ -116,7 +129,7 @@ export function useTetris(seed?: number, active = true) {
       switch (e.code) {
         case "ArrowLeft": case "KeyA": das.current = { dir: -1, start: performance.now(), last: performance.now() }; action("left"); break;
         case "ArrowRight": case "KeyD": das.current = { dir: 1, start: performance.now(), last: performance.now() }; action("right"); break;
-        case "ArrowDown": case "KeyS": action("down"); break;
+        case "ArrowDown": case "KeyS": softDrop.current = { held: true, last: performance.now() }; action("down"); break;
         case "ArrowUp": case "KeyX": case "KeyW": action("cw"); break;
         case "KeyZ": action("ccw"); break;
         case "Space": action("hard"); break;
@@ -126,14 +139,18 @@ export function useTetris(seed?: number, active = true) {
     const up = (e: KeyboardEvent) => {
       if (e.code === "ArrowLeft" || e.code === "KeyA") { if (das.current.dir === -1) das.current.dir = null; }
       if (e.code === "ArrowRight" || e.code === "KeyD") { if (das.current.dir === 1) das.current.dir = null; }
+      if (e.code === "ArrowDown" || e.code === "KeyS") softDrop.current.held = false;
     };
+    const blur = () => { das.current.dir = null; softDrop.current.held = false; };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
     return () => {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
     };
   }, [active, action]);
 
-  return { snap, started, start, action, refresh, setOnLock, engine: engineRef.current! };
+  return { snap, started, start, action, setSoftDropHeld, refresh, setOnLock, engine: engineRef.current! };
 }

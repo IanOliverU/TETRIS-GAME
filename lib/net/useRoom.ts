@@ -24,7 +24,7 @@ export function useRoom({ code, playerId, name, enabled }: UseRoomArgs) {
   const [peers, setPeers] = useState<PresenceState[]>([]);
   const [hostId, setHostId] = useState<string>(playerId);
   const [phase, setPhase] = useState<GamePhase>("lobby");
-  const [config, setConfig] = useState<RoomConfig>({ maxPlayers: 15, garbageMode: "normal" });
+  const [config, setConfig] = useState<RoomConfig>({ maxPlayers: 15, garbageMode: "normal", gameMode: "survival" });
   const [seed, setSeed] = useState<number>(() => Math.floor(Math.random() * 2 ** 31));
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [playlist, setPlaylist] = useState<PlaylistTrack[]>([]);
@@ -36,7 +36,7 @@ export function useRoom({ code, playerId, name, enabled }: UseRoomArgs) {
   const [notice, setNotice] = useState<string | null>(null);
   const joinedAt = useRef<number>(Date.now());
   const hostIdRef = useRef<string>(playerId);
-  const configRef = useRef<RoomConfig>({ maxPlayers: 15, garbageMode: "normal" });
+  const configRef = useRef<RoomConfig>({ maxPlayers: 15, garbageMode: "normal", gameMode: "survival" });
   const phaseRef = useRef<GamePhase>("lobby");
   const seedRef = useRef<number>(0);
   useEffect(() => { hostIdRef.current = hostId; }, [hostId]);
@@ -103,7 +103,7 @@ export function useRoom({ code, playerId, name, enabled }: UseRoomArgs) {
       switch (evt.type) {
         case "room_state":
           setHostId(evt.hostId);
-          setConfig(evt.config);
+          setConfig({ ...evt.config, gameMode: evt.config.gameMode ?? "survival" });
           setPhase(evt.phase);
           setSeed(evt.seed);
           break;
@@ -136,6 +136,7 @@ export function useRoom({ code, playerId, name, enabled }: UseRoomArgs) {
           setMusic({ index: evt.index, startedAt: evt.startedAt, isPlaying: evt.isPlaying, order: evt.order });
           break;
         case "game_start":
+          setConfig((current) => ({ ...current, gameMode: evt.gameMode ?? "survival" }));
           setPendingStart({ startAt: evt.startAt, seed: evt.seed });
           setSeed(evt.seed);
           setPhase("countdown");
@@ -187,7 +188,7 @@ export function useRoom({ code, playerId, name, enabled }: UseRoomArgs) {
     if (!supa) return;
     broadcast({ type: "room_state", hostId, config, phase, seed });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHost, phase, config.maxPlayers, config.garbageMode, seed, connected]);
+  }, [isHost, phase, config.maxPlayers, config.garbageMode, config.gameMode, seed, connected]);
 
   const sendChat = useCallback(
     (text: string) => {
