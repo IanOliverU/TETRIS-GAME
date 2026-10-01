@@ -1,6 +1,26 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { sanitizeName, validateName } from "@/lib/session";
+import PiecePreview from "./PiecePreview";
+import { COLORS, type TetrominoType } from "@/lib/tetris/constants";
+
+const entryRows = [
+  "0000000000", "000TTT0000", "0000T00000", "0000000000",
+  "0000000000", "0000000000", "0000000000", "0000000000",
+  "0000000000", "0000000000", "JJ00000000", "J00000LL00",
+  "JSS0000LZZ", "SSOO0I0LLZ", "TTOO0I00ZZ", "TTLL0ISSOO",
+];
+
+function EntryBoard() {
+  return (
+    <div className="entry-board" aria-hidden="true">
+      {entryRows.flatMap((row, y) => [...row].map((cell, x) => (
+        <span key={`${x}-${y}`} className={`entry-board__cell ${cell !== "0" ? "entry-board__block" : ""} ${y < 3 && cell !== "0" ? "entry-board__falling" : ""}`}
+          style={cell !== "0" ? { background: `linear-gradient(145deg, ${COLORS[cell as TetrominoType].main}, ${COLORS[cell as TetrominoType].dark})` } : undefined} />
+      )))}
+    </div>
+  );
+}
 
 export default function NameModal({
   roomCode,
@@ -27,12 +47,24 @@ export default function NameModal({
   };
 
   return (
-    <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="panel panel-sharp w-full max-w-md p-8 text-center">
-        <div className="text-xs tracking-[0.35em] text-cyan-300/80">TETRIS BATTLE</div>
-        <h1 className="mt-2 text-3xl font-bold tracking-wide">
+    <div className="entry-screen">
+      <div className="entry-pieces" aria-hidden="true">
+        {(["I", "T", "S", "L", "O", "J"] as TetrominoType[]).map((piece, i) => (
+          <div key={piece} className={`entry-piece entry-piece--${i}`}><PiecePreview type={piece} cell={38} /></div>
+        ))}
+      </div>
+      <div className="entry-card">
+        <div className="entry-showcase">
+          <div className="entry-brand">TETRIS<span>BATTLE</span></div>
+          <EntryBoard />
+          <div className="entry-showcase__caption">STACK. CLEAR. SURVIVE.</div>
+        </div>
+        <form className="entry-form" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <div className="entry-eyebrow"><span /> PLAYER SELECT</div>
+        <h1 className="entry-heading">
           WHAT SHOULD WE CALL YOU?
         </h1>
+        <p className="entry-intro">Pick a name. Your next battle starts here.</p>
         {roomCode && (
           <p className="mt-3 text-sm text-slate-300">
             You were invited to room{" "}
@@ -40,7 +72,9 @@ export default function NameModal({
             Enter your name to join.
           </p>
         )}
+        <label htmlFor="player-name" className="entry-label">PLAYER NAME</label>
         <input
+          id="player-name"
           ref={inputRef}
           value={value}
           onChange={(e) => {
@@ -49,27 +83,30 @@ export default function NameModal({
           }}
           onKeyDown={(e) => {
             e.stopPropagation();
-            if (e.key === "Enter") submit();
           }}
           onKeyUp={(e) => e.stopPropagation()}
-          placeholder="Ian Oliver"
+          placeholder="Your nickname"
           maxLength={16}
           autoComplete="off"
           data-name-input
-          className="mt-6 w-full border border-slate-600 bg-black/60 px-4 py-3 text-center text-xl tracking-wide outline-none placeholder:text-slate-600 focus:border-cyan-400"
+          aria-invalid={!!error}
+          aria-describedby={error ? "player-name-error" : undefined}
+          className="entry-input"
         />
-        {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+        {error && <p id="player-name-error" role="alert" className="mt-2 text-sm text-red-400">{error}</p>}
         <button
-          onClick={submit}
-          className="btn-arcade mt-6 w-full px-6 py-3 text-lg font-bold tracking-widest"
+          type="submit"
+          className="entry-play"
         >
-          LET&apos;S PLAY
+          LET&apos;S PLAY <span aria-hidden="true">→</span>
         </button>
-        <p className="mt-4 text-[11px] leading-relaxed text-slate-500">
+        <div className="entry-key-hint">or press <kbd>Enter ↵</kbd></div>
+        <p className="entry-note">
           No accounts. Name lives only in this tab.
           <br />
           Refresh = you start over as a new player.
         </p>
+        </form>
       </div>
     </div>
   );
